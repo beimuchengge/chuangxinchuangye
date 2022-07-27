@@ -1,0 +1,97 @@
+import random
+
+
+def tianchong(plaintext, plainlen):  # 将明文按格式要求填充为长度为512倍数的二进制串
+    k = (959 - (plainlen % 512)) % 512
+    m = (((plaintext << 1) + 1) << (k + 64)) + 24
+    return m
+
+
+def P0(X):
+    return X ^ (X << 9 & 0xffffffff | X >> 23) ^ (X << 17 & 0xffffffff | X >> 15)
+
+
+def P1(X):
+    return X ^ (X << 15 & 0xffffffff | X >> 17) ^ (X << 23 & 0xffffffff | X >> 9)
+
+
+def FF(j, X, Y, Z):
+    if j <= 15:
+        output = X ^ Y ^ Z
+    else:
+        output = (X & Y) | (Y & Z) | (Z & X)
+    return output
+
+
+def GG(j, X, Y, Z):
+    if j <= 15:
+        output = X ^ Y ^ Z
+    else:
+        output = (X & Y) | (Z & (X ^ (0xffffffff)))
+    return output
+
+
+def diedaiyasuo(plaintext, n,IV):
+    V = [0] * (n + 1)
+    V[0] = IV
+    W = [0] * 68
+    WW = [0] * 64
+    for i in range(n):
+        m = (plaintext >> ((n - 1 - i) * 512)) & ((1 << 512) - 1)  # 将明文分为长度为512bit的组
+        for j in range(16):
+            W[j] = (m >> (32 * (15 - j))) & 0xffffffff
+        for j in range(16, 68):
+            W[j] = P1(W[j - 16] ^ W[j - 9] ^ ((W[j - 3] << 15) & 0xffffffff | (W[j - 3] >> 17))) ^ (
+                    (W[j - 13] << 7) & 0xffffffff | (W[j - 13] >> 25)) ^ W[j - 6]
+        for j in range(64):
+            WW[j] = W[j] ^ W[j + 4]
+        A = [0] * 8
+        for j in range(8):
+            A[j] = (V[i] >> (32 * (7 - j))) & 0xffffffff
+        T = [0] * 64
+        for j in range(16):
+            T[j] = 0x79cc4519
+        for j in range(16, 64):
+            T[j] = 0x7a879d8a
+        for j in range(64):
+            ss = ((A[0] << 12) & 0xffffffff | (A[0] >> 20)) + A[4] + (
+                    (T[j] << (j & 31)) & 0xffffffff | (T[j] >> (32 - (j & 31))))
+            ss = ss & 0xffffffff
+            SS1 = (ss << 7) & 0xffffffff | (ss >> 25)
+            SS2 = SS1 ^ ((A[0] << 12) & 0xffffffff | A[0] >> 20)
+            TT1 = (FF(j, A[0], A[1], A[2]) + A[3] + SS2 + WW[j]) & 0xffffffff
+            TT2 = (GG(j, A[4], A[5], A[6]) + A[7] + SS1 + W[j]) & 0xffffffff
+            A[3] = A[2]
+            A[2] = (A[1] << 9) & 0xffffffff | (A[1] >> 23)
+            A[1] = A[0]
+            A[0] = TT1
+            A[7] = A[6]
+            A[6] = (A[5] << 19) & 0xffffffff | (A[5] >> 13)
+            A[5] = A[4]
+            A[4] = P0(TT2)
+        V[i + 1] = ((A[0] << (32 * 7)) | (A[1] << (32 * 6)) | (A[2] << (32 * 5)) | (A[3] << (32 * 4)) | (
+                A[4] << (32 * 3)) | (A[5] << (32 * 2)) | (A[6] << 32) | A[7]) ^ V[i]
+
+    return V[n]
+
+
+def sm3enc(plaintext, plainlen,IV=0x7380166f4914b2b9172442d7da8a0600a96f30bc163138aae38dee4db0fb0e4e):
+    plaintext = tianchong(plaintext, plainlen)
+    n = (plainlen + 576) >> 9
+    return diedaiyasuo(plaintext, n,IV)
+
+
+# 长度扩展攻击：
+# 实验目标为：对任意长度的明文plaintext，已知其sm3hash值，可以任意选取m，得到（plaintext+扩展值padding+m的sm3hash值
+# 流程：plaintext是未知的，但是我们已知plaintext填充后进行sm3hash后的16进制数，m是我们想要置于padding后面的信息，这里我们选择把sm3enc（plaintext）作为第二次的IV值加密m，即可得到sm3enc（plaintext+padding+m）的值
+# ps:由于库中的sm3函数输入输出的形式不统一，故本次代码使用了自己编写的sm3算法
+L=32            #明文长度
+plaintext = random.randint(0, 1 << L)  # 随机生成一个明文
+LL=32           #选取附加消息的长度
+m = random.randint(0, 1 << LL)
+a = sm3enc(plaintext,L)
+hash1=sm3enc(m,LL,a)        #长度攻击后的hash值
+b=(tianchong(plaintext, L)<<LL)|m
+hash2=sm3enc(b,(((L+577)>>9)<<9)+LL)        #正常加密的hash值
+print(hash1)
+print(hash2)
